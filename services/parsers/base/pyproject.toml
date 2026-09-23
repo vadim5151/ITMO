@@ -1,0 +1,18 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "base" 
+version = "0.1.0"
+description = "Базовые классы парсеров websocket под биржи" 
+
+packages = [{include = "base"}]
+
+# Какие библиотеки используются в нашей "библиотеке"
+[tool.poetry.dependencies]
+python = "^3.13" # Обязательно указать версию python
+requests = "^2.34.2"
+websockets = "^17.0.1"
+
+
