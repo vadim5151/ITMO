@@ -1,0 +1,17 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "bitget_shared" 
+version = "0.1.0"
+description = "Общие файлы для spot и futures" 
+
+packages = [{include = "bitget_shared"}]
+
+# Какие библиотеки используются в нашей "библиотеке"
+[tool.poetry.dependencies]
+python = "^3.13" # Обязательно указать версию python
+
+
+
