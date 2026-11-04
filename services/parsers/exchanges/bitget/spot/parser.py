@@ -25,14 +25,7 @@ class BitgetParser(ParserSubscribe):
         Обновляет self.symbols в формате:{'token': {'trading': True, 'sub': 'True'}}
         """
         current_tokens = [symbol['symbol'] for symbol in pairs.get('data', [])]
-        for symbol in current_tokens:
-            if symbol not in self.symbols:
-                self.symbols[symbol] = {'trading': True, 'sub': False}
-
-
-        for symbol in self.symbols:
-            if symbol not in current_tokens:
-                self.symbols[symbol]['trading'] = False
+        return current_tokens
        
     
     async def subscribe_to_symbols(self, ws) -> None:
