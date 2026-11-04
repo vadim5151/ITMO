@@ -1,10 +1,8 @@
 import asyncio
-import traceback
 import logging
 
-from bitget_parser import BitgetParser
+from services.parsers.exchanges.bitget.spot.parser import BitgetParser
 from configs.logging_config import setup_logging
-
 
 
 

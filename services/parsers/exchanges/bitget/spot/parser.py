@@ -19,7 +19,7 @@ class BitgetParser(ParserSubscribe):
         'timestamp': время обновления данных (в секундах)
     Отправляет их в redis 
     """
-    def serialize_pairs(self, pairs: dict) -> list[str]:
+    def serialize_pairs(self, pairs: dict) -> None:
         """
         Преобразует json-ответ от биржи в список тикеров
         Обновляет self.symbols в формате:{'token': {'trading': True, 'sub': 'True'}}
