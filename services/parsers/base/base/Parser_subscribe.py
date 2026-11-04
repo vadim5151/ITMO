@@ -67,20 +67,29 @@ class ParserSubscribe(BaseParser):
             logging.error(f'Непредвиденная ошибка: {e}')
 
 
-    def get_market_symbols(self):
+    def fetch_market_symbols(self):
         """
         Запрашивает список пар через REST API и вызывает сериализацию
         """
         try:
             res = requests.get(self.url_get_pairs)
-            self.serialize_pairs(res.json())
+            res.raise_for_status()
+            current_tokens = self.serialize_pairs(res.json())
+
+            for symbol in current_tokens:
+                if symbol not in self.symbols:
+                    self.symbols[symbol] = {'trading': True, 'sub': False}
+    
+            for symbol in self.symbols:
+                if symbol not in current_tokens:
+                    self.symbols[symbol]['trading'] = False
 
             if not self.symbols:
                 logging.error('Получен пустой список торговых пар')
             else:
                 logging.info('Список торговых пар был получен')     
         except RequestError:
-            logging.error('Сетевая ошибка REST API')
+            logging.exception('Сетевая ошибка REST API')
 
     
     async def send_ping(self, ws) -> None:
@@ -114,7 +123,7 @@ class ParserSubscribe(BaseParser):
         """
         Устанавливает соединение с биржей через WebSocket
         """
-        self.get_market_symbols()
+        self.fetch_market_symbols()
         while True:
             try:
                 logging.info('Подключение к WebSocket')
