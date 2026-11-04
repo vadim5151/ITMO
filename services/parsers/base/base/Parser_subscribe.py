@@ -1,60 +1,136 @@
 import asyncio
 import json
+import logging
 from abc import abstractmethod
 
 import requests
 import websockets
 
 from base.Parser import BaseParser
+from base.exceptions import *
 
 
 
-# написать общий класс для всез бирж
 class ParserSubscribe(BaseParser):
-    def __init__(self, url_wss, exchange_name, url_get_pairs, ping_interval, ping_format):
+    """Парсер для бирж, требующих подписки для получения торговых пар
+
+    Сначала получает список доступных торговых пар, затем подписывается на них 
+
+    Attributes:
+        url_get_pairs (str): REST API URL для получения списка всех торговых пар
+        ping_interval (int): Интервал между отправками ping-сообщений
+        ping_format (any): Формат ping-сообщений для биржи
+        symbols (list[str]): Отфармированный список торговых пар (тикеров) биржи
+    """
+    def __init__(
+        self, 
+        url_wss: str, 
+        exchange_name: str, 
+        url_get_pairs: str, 
+        ping_interval: int, 
+        ping_format: any,
+    ) -> None:
         super().__init__(url_wss, exchange_name)
         self.url_get_pairs = url_get_pairs
         self.ping_interval = ping_interval
         self.ping_format = ping_format
-        self.symbols = self.get_market_symbols()
+        self.symbols = {}
 
 
     @abstractmethod
-    # преобразует json-ответ от биржи в ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHBTC']
-    def serialize_pairs(self, pairs:dict):
+    def serialize_pairs(self, pairs: dict) -> list[str]:
+        """
+        Преобразует json-ответ от биржи в словарь тикеров
+        return {'token': {'trading': True, 'sub': 'True'}}
+        """
         pass
 
 
     @abstractmethod
-    async def subscribe_to_symbols(self, ws):
+    async def subscribe_to_symbols(self, ws) -> None:
+        """
+        Отправляет подписки на каждый тикер через ws-соединение
+        """
         pass
+
+
+    async def symbols_updating(self):
+        """
+        Каждые 5 минут вызывает функцию get_market_symbols, для обновления словаря символов
+        """
+        try:
+            while True:
+                await asyncio.sleep(300)
+                await self.get_market_symbols()
+                logging.info('Повторное обновление списка торговых пар')
+        except Exception as e:
+            logging.error(f'Непредвиденная ошибка: {e}')
 
 
     def get_market_symbols(self):
-        # return ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHBTC' ...]
-        res = requests.get(self.url_get_pairs)
-        symbols = self.serialize_pairs(res.json())
-        return symbols
+        """
+        Запрашивает список пар через REST API и вызывает сериализацию
+        """
+        try:
+            res = requests.get(self.url_get_pairs)
+            self.serialize_pairs(res.json())
+
+            if not self.symbols:
+                logging.error('Получен пустой список торговых пар')
+            else:
+                logging.info('Список торговых пар был получен')     
+        except RequestError:
+            logging.error('Сетевая ошибка REST API')
 
     
-    async def send_ping(self, ws):
-        while True:
-            await asyncio.sleep(self.ping_interval)
-            await ws.send(self.ping_format)
+    async def send_ping(self, ws) -> None:
+        """
+        Отправляет ping-сообщения с интервалов в ping_interval
+        """
+        try:
+            while True:
+                await asyncio.sleep(self.ping_interval)
+                await ws.send(self.ping_format)
+        except SendPingError:
+            logging.warning(f'Ошибка при отправке ping-сообщения')
+
+
+    async def _listen_socket(self, ws) -> None:
+        """
+        Внутренний цикл для чтения сообщений из WebSocket сокета
+        """
+        async for message in ws:
+            if message == 'pong':
+                continue
+            
+            try:
+                data = json.loads(message)
+                await self.process_data(data)
+            except Exception as e:
+                logging.warning(f'Получено не JSON сообщение {e}')
 
 
     async def start(self):
-        async with websockets.connect(self.url_wss) as ws:
-            await self.subscribe_to_symbols(ws)  
+        """
+        Устанавливает соединение с биржей через WebSocket
+        """
+        self.get_market_symbols()
+        while True:
+            try:
+                logging.info('Подключение к WebSocket')
+                async with websockets.connect(self.url_wss) as ws: 
+                    logging.info('Соединение установлено')
 
-            # Запускаем ping в фоновом режиме
-            asyncio.create_task(self.send_ping(ws))
+                    async with asyncio.TaskGroup() as tg:
+                        tg.create_task(self.subscribe_to_symbols(ws))
+                        tg.create_task(self.send_ping(ws))
+                        tg.create_task(self.symbols_updating()) 
+                        tg.create_task(self._listen_socket(ws)) 
 
-            while True:  
-                try:
-                    res = await ws.recv()
-                    change_ticker = json.loads(res)
-                    await self.process_data(change_ticker)
-                except websockets.exceptions.ConnectionClosedError:
-                    print('соединение прервано')
-                    break
+            except WebSocketTimeoutError:
+                logging.error(f'Сервер перестал присылать данные, но не закрыл сокет корректно')
+            except ConnectionClosedError:
+                logging.error(f'соединение прервано')
+            except:
+                logging.error(f'Непредвиденная ошибка')
+

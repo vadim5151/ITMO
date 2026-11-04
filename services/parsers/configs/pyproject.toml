@@ -1,0 +1,16 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "configs" 
+version = "0.1.0"
+
+packages = [{include = "configs"}]
+
+# Какие библиотеки используются в нашей "библиотеке"
+[tool.poetry.dependencies]
+python = "^3.13" # Обязательно указать версию python
+
+
+
