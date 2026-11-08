@@ -54,6 +54,38 @@ class ParserSubscribe(BaseParser):
         pass
 
 
+    @abstractmethod
+    async def listening_subs(self, data: dict) -> None:
+        """
+        Прослушивает ответы на подписки
+        """
+
+
+    @abstractmethod
+    async def first_listening_subs(self, data: dict):
+        """
+        Прослушивает ответы на первые подписки при первом запуске, 
+        работает пока не получит ответы на все торговые пары
+        """
+        pass
+
+
+    @abstractmethod
+    async def first_subscribe_to_symbols(self, ws, batch_size=10) -> None:
+        """
+        Отправляет подписки на каждый тикер через ws-соединение при первом запуске
+        """
+        pass
+
+
+    @abstractmethod
+    async def process_data(self, data: dict) -> None:
+        """
+        Форматирует ответ от биржи и отправляет полученные данные в redis
+        """
+        pass
+
+
     async def symbols_updating(self):
         """
         Каждые 5 минут вызывает функцию get_market_symbols, для обновления словаря символов
@@ -123,12 +155,19 @@ class ParserSubscribe(BaseParser):
         """
         Устанавливает соединение с биржей через WebSocket
         """
+        # первое получение торговых пар
         self.fetch_market_symbols()
+
         while True:
             try:
                 logging.info('Подключение к WebSocket')
                 async with websockets.connect(self.url_wss) as ws: 
                     logging.info('Соединение установлено')
+
+                    async with asyncio.TaskGroup() as tg:
+                        tg.create_task(self.first_subscribe_to_symbols(ws))
+                        tg.create_task(self.first_listening_subs(ws))
+
 
                     async with asyncio.TaskGroup() as tg:
                         tg.create_task(self.subscribe_to_symbols(ws))

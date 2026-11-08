@@ -26,11 +26,57 @@ class BitgetParser(ParserSubscribe):
         """
         current_tokens = [symbol['symbol'] for symbol in pairs.get('data', [])]
         return current_tokens
+
        
-    
+    async def first_subscribe_to_symbols(self, ws, batch_size=10) -> None:
+        """
+        Отправляет подписки на каждый тикер через ws-соединение при первом запуске
+        """
+        symbols_keys = list(self.symbols.keys())
+        for i in range(0, len(symbols_keys), batch_size):
+            batch = symbols_keys[i : i + batch_size]
+            payload = {
+                "op":'subscribe',
+                "args": [
+                    {
+                        "instType": "SPOT",
+                        "channel": "ticker",
+                        "instId": symbol,
+                    } for symbol in batch
+                ]
+            }
+
+            await ws.send(json.dumps(payload))
+            await asyncio.sleep(0.02)
+        logging.info('Подписки отправлены')
+
+
+    async def first_listening_subs(self, ws) -> None:
+        """
+        Прослушивает ответы на первые подписки при первом запуске, 
+        работает пока не получит ответы на все торговые пары
+        """
+        async for message in ws:
+            try:
+                data = json.loads(message)
+            except Exception as e:
+                logging.warning(f'Получено не JSON сообщение {e}')
+
+            event = data.get('event')
+            if event in ('subscribe', 'unsubscribe'):
+                await self.listening_subs(data)
+                return
+
+            all_subscribed = all(
+                info['sub'] for info in self.symbols.values() if info['trading']
+            )
+            if all_subscribed:
+                logging.info("Все первичные подписки подтверждены")
+                break
+
     async def subscribe_to_symbols(self, ws) -> None:
         """
-        Отправляет подписки на каждый тикер через ws-соединение
+        Актуализация данных по подписке 
         """
         while True:
             try:
@@ -53,8 +99,6 @@ class BitgetParser(ParserSubscribe):
                             ]
                         }
                         await ws.send(json.dumps(payload))
-                        await asyncio.sleep(0.02)
-
                 await asyncio.sleep(300)
             except Exception as e:
                 logging.error(f'Ошибка в subscribe_to_symbols {e}')

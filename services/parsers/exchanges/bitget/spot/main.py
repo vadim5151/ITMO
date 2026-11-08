@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from services.parsers.exchanges.bitget.spot.parser import BitgetParser
+from parser import BitgetParser
 from configs.logging_config import setup_logging
 
 
