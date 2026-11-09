@@ -22,7 +22,7 @@ class BitgetParser(ParserSubscribe):
     def serialize_pairs(self, pairs: dict) -> None:
         """
         Преобразует json-ответ от биржи в список тикеров
-        Обновляет self.symbols в формате:{'token': {'trading': True, 'sub': 'True'}}
+        return ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHBTC']
         """
         current_tokens = [symbol['symbol'] for symbol in pairs.get('data', [])]
         return current_tokens
@@ -30,7 +30,7 @@ class BitgetParser(ParserSubscribe):
        
     async def first_subscribe_to_symbols(self, ws, batch_size=10) -> None:
         """
-        Отправляет подписки на каждый тикер через ws-соединение при первом запуске
+        Отправляет подписки на каждый тикер через ws-соединение батчами при первом запуске
         """
         symbols_keys = list(self.symbols.keys())
         for i in range(0, len(symbols_keys), batch_size):
@@ -48,33 +48,10 @@ class BitgetParser(ParserSubscribe):
 
             await ws.send(json.dumps(payload))
             await asyncio.sleep(0.02)
-        logging.info('Подписки отправлены')
+        logging.info('первичные подписки отправлены')
 
 
-    async def first_listening_subs(self, ws) -> None:
-        """
-        Прослушивает ответы на первые подписки при первом запуске, 
-        работает пока не получит ответы на все торговые пары
-        """
-        async for message in ws:
-            try:
-                data = json.loads(message)
-            except Exception as e:
-                logging.warning(f'Получено не JSON сообщение {e}')
-
-            event = data.get('event')
-            if event in ('subscribe', 'unsubscribe'):
-                await self.listening_subs(data)
-                return
-
-            all_subscribed = all(
-                info['sub'] for info in self.symbols.values() if info['trading']
-            )
-            if all_subscribed:
-                logging.info("Все первичные подписки подтверждены")
-                break
-
-    async def subscribe_to_symbols(self, ws) -> None:
+    async def subscribe_updating(self, ws) -> None:
         """
         Актуализация данных по подписке 
         """
@@ -102,11 +79,30 @@ class BitgetParser(ParserSubscribe):
                 await asyncio.sleep(300)
             except Exception as e:
                 logging.error(f'Ошибка в subscribe_to_symbols {e}')
-
-
-    async def listening_subs(self, data: dict) -> None:
+            
+    
+    async def process_data(self, data: dict) -> None:
         """
-        Прослушивает ответы на подписки
+        Форматирует ответ от биржи и отправляет полученные данные в redis
+        """
+        event = data.get('event')
+        code = str(data.get('code', ''))
+
+        if event and event == 'error':
+            if code == '25000':
+                raise SystemError
+            elif code == '40725':
+                raise ServiceReturnError 
+            
+        if event in ('subscribe', 'unsubscribe'):
+            await self.process_sub(data)
+        else:
+            await self.process_ticker(data)
+
+    
+    async def process_sub(self, data: dict) -> None:
+        """
+        обрабатывает ответы на подписку/отписку
         """
         event = data.get('event')
         arg = data.get("arg", {})
@@ -121,28 +117,15 @@ class BitgetParser(ParserSubscribe):
         elif event == 'unsubscribe':
             self.symbols[inst_id]['sub'] = False
             self.symbols[inst_id]['trading'] = False
-            
-    
-    async def process_data(self, data: dict) -> None:
-        """
-        Форматирует ответ от биржи и отправляет полученные данные в redis
-        """
-        event = data.get('event')
-        code = str(data.get('code', ''))
 
-        if event and event == 'error':
-            if code == '25000':
-                raise SystemError
-            elif code == '40725':
-                raise ServiceReturnError
-            
-        if event in ('subscribe', 'unsubscribe'):
-            await self.listening_subs(data)
-
+    async def process_ticker(self, data: dict) -> None:
+        """
+        Обрабатывает ответ на тикеры
+        """
         ticker_list = data.get("data")
         if not ticker_list or not isinstance(ticker_list, list):
             raise InvalidDataError
-        # проверка на наличие всех полей, необходимых нам 
+        
         ticker_data = ticker_list[0]
 
         normalized_msg = {
@@ -153,8 +136,3 @@ class BitgetParser(ParserSubscribe):
             'timestamp': data.get('ts')
         }
         print(normalized_msg)
-
-    
-
-
-

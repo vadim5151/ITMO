@@ -22,7 +22,8 @@ async def main():
         logging.error(
             msg=f'Не удалось инициализировать объект класса Bitget_Parser'
         )
-
+        return
+    
     await bitget_parser.start()
 
     

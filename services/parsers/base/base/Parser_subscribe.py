@@ -47,7 +47,7 @@ class ParserSubscribe(BaseParser):
 
 
     @abstractmethod
-    async def subscribe_to_symbols(self, ws) -> None:
+    async def subscribe_updating(self, ws) -> None:
         """
         Отправляет подписки на каждый тикер через ws-соединение
         """
@@ -55,17 +55,17 @@ class ParserSubscribe(BaseParser):
 
 
     @abstractmethod
-    async def listening_subs(self, data: dict) -> None:
+    async def process_sub(self, data: dict) -> None:
         """
-        Прослушивает ответы на подписки
+        Обрабатывает ответы на подписку/отписку
         """
+        pass
 
 
     @abstractmethod
-    async def first_listening_subs(self, data: dict):
+    async def process_ticker(self, data):
         """
-        Прослушивает ответы на первые подписки при первом запуске, 
-        работает пока не получит ответы на все торговые пары
+        Обрабатывает ответ на тикеры
         """
         pass
 
@@ -86,6 +86,20 @@ class ParserSubscribe(BaseParser):
         pass
 
 
+    async def _listen_socket(self, ws) -> None:
+        """
+        Внутренний цикл для чтения сообщений из WebSocket сокета
+        """
+        async for message in ws:
+            if message == 'pong':
+                continue
+            try:
+                data = json.loads(message)
+                await self.process_data(data)
+            except Exception as e:
+                logging.warning(f'Ошибка при обработке ответа сервера {e}')
+
+
     async def symbols_updating(self):
         """
         Каждые 5 минут вызывает функцию get_market_symbols, для обновления словаря символов
@@ -93,7 +107,7 @@ class ParserSubscribe(BaseParser):
         try:
             while True:
                 await asyncio.sleep(300)
-                await self.get_market_symbols()
+                await self.fetch_market_symbols()
                 logging.info('Повторное обновление списка торговых пар')
         except Exception as e:
             logging.error(f'Непредвиденная ошибка: {e}')
@@ -136,21 +150,6 @@ class ParserSubscribe(BaseParser):
             logging.warning(f'Ошибка при отправке ping-сообщения')
 
 
-    async def _listen_socket(self, ws) -> None:
-        """
-        Внутренний цикл для чтения сообщений из WebSocket сокета
-        """
-        async for message in ws:
-            if message == 'pong':
-                continue
-            
-            try:
-                data = json.loads(message)
-                await self.process_data(data)
-            except Exception as e:
-                logging.warning(f'Получено не JSON сообщение {e}')
-
-
     async def start(self):
         """
         Устанавливает соединение с биржей через WebSocket
@@ -163,22 +162,18 @@ class ParserSubscribe(BaseParser):
                 logging.info('Подключение к WebSocket')
                 async with websockets.connect(self.url_wss) as ws: 
                     logging.info('Соединение установлено')
-
+                
                     async with asyncio.TaskGroup() as tg:
-                        tg.create_task(self.first_subscribe_to_symbols(ws))
-                        tg.create_task(self.first_listening_subs(ws))
-
-
-                    async with asyncio.TaskGroup() as tg:
-                        tg.create_task(self.subscribe_to_symbols(ws))
-                        tg.create_task(self.send_ping(ws))
-                        tg.create_task(self.symbols_updating()) 
                         tg.create_task(self._listen_socket(ws)) 
+                        tg.create_task(self.send_ping(ws))
+                        tg.create_task(self.first_subscribe_to_symbols(ws))
+                        tg.create_task(self.symbols_updating()) 
+                        tg.create_task(self.subscribe_updating(ws))
 
             except WebSocketTimeoutError:
                 logging.error(f'Сервер перестал присылать данные, но не закрыл сокет корректно')
             except ConnectionClosedError:
                 logging.error(f'соединение прервано')
-            except:
-                logging.error(f'Непредвиденная ошибка')
+            except Exception as e:
+                logging.error(f'Непредвиденная ошибка {e}')
 
