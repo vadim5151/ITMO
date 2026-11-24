@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import traceback
 from abc import abstractmethod
 
 import requests
@@ -18,7 +19,7 @@ class ParserSubscribe(BaseParser):
 
     Attributes:
         url_get_pairs (str): REST API URL для получения списка всех торговых пар
-        ping_interval (int): Интервал между отправками ping-сообщений
+        ping_delay (int): Интервал между отправками ping-сообщений
         ping_format (any): Формат ping-сообщений для биржи
         symbols (list[str]): Отфармированный список торговых пар (тикеров) биржи
     """
@@ -27,29 +28,20 @@ class ParserSubscribe(BaseParser):
         url_wss: str, 
         exchange_name: str, 
         url_get_pairs: str, 
-        ping_interval: int, 
+        ping_delay: int, 
         ping_format: any,
     ) -> None:
         super().__init__(url_wss, exchange_name)
         self.url_get_pairs = url_get_pairs
-        self.ping_interval = ping_interval
+        self.ping_delay = ping_delay
         self.ping_format = ping_format
         self.symbols = {}
 
 
     @abstractmethod
-    def serialize_pairs(self, pairs: dict) -> list[str]:
+    async def process_data(self, data: dict) -> None:
         """
-        Преобразует json-ответ от биржи в словарь тикеров
-        return {'token': {'trading': True, 'sub': 'True'}}
-        """
-        pass
-
-
-    @abstractmethod
-    async def subscribe_updating(self, ws) -> None:
-        """
-        Отправляет подписки на каждый тикер через ws-соединение
+        Форматирует ответ от биржи и отправляет полученные данные в redis
         """
         pass
 
@@ -69,6 +61,15 @@ class ParserSubscribe(BaseParser):
         """
         pass
 
+    
+    @abstractmethod
+    def serialize_pairs(self, pairs: dict) -> list[str]:
+        """
+        Преобразует json-ответ от биржи в словарь тикеров
+        return {'token': {'trading': True, 'sub': 'True'}}
+        """
+        pass
+
 
     @abstractmethod
     async def first_subscribe_to_symbols(self, ws, batch_size=10) -> None:
@@ -77,13 +78,41 @@ class ParserSubscribe(BaseParser):
         """
         pass
 
-
+    
     @abstractmethod
-    async def process_data(self, data: dict) -> None:
+    async def subscribe_updating(self, ws) -> None:
         """
-        Форматирует ответ от биржи и отправляет полученные данные в redis
+        Отправляет подписки на каждый тикер через ws-соединение
         """
         pass
+
+
+    async def start(self):
+        """
+        Устанавливает соединение с биржей через WebSocket
+        """
+        # первое получение торговых пар
+        self.fetch_market_symbols()
+
+        while True:
+            try:
+                logging.info('Подключение к WebSocket')
+                async with websockets.connect(self.url_wss, ping_interval=None) as ws: 
+                    logging.info('Соединение установлено')
+                
+                    async with asyncio.TaskGroup() as tg:
+                        tg.create_task(self._listen_socket(ws)) 
+                        tg.create_task(self.send_ping(ws))
+                        tg.create_task(self.first_subscribe_to_symbols(ws))
+                        tg.create_task(self.symbols_updating()) 
+                        tg.create_task(self.subscribe_updating(ws))
+
+            except WebSocketTimeoutError:
+                logging.error(f'Сервер перестал присылать данные, но не закрыл сокет корректно')
+            except ConnectionClosedError:
+                logging.error(f'соединение прервано')
+            except Exception as e:
+                logging.error(f'Непредвиденная ошибка {traceback.format_exc()}')
 
 
     async def _listen_socket(self, ws) -> None:
@@ -93,11 +122,12 @@ class ParserSubscribe(BaseParser):
         async for message in ws:
             if message == 'pong':
                 continue
+            # проверка на активность (self.active)
             try:
                 data = json.loads(message)
                 await self.process_data(data)
             except Exception as e:
-                logging.warning(f'Ошибка при обработке ответа сервера {e}')
+                logging.exception(f'Ошибка при обработке ответа сервера {e}')
 
 
     async def symbols_updating(self):
@@ -110,7 +140,7 @@ class ParserSubscribe(BaseParser):
                 await self.fetch_market_symbols()
                 logging.info('Повторное обновление списка торговых пар')
         except Exception as e:
-            logging.error(f'Непредвиденная ошибка: {e}')
+            logging.error(f'Непредвиденная ошибка в обновлении торговых пар {e}')
 
 
     def fetch_market_symbols(self):
@@ -140,40 +170,15 @@ class ParserSubscribe(BaseParser):
     
     async def send_ping(self, ws) -> None:
         """
-        Отправляет ping-сообщения с интервалов в ping_interval
+        Отправляет ping-сообщения с интервалов в ping_delay
         """
         try:
             while True:
-                await asyncio.sleep(self.ping_interval)
+                await asyncio.sleep(self.ping_delay)
                 await ws.send(self.ping_format)
         except SendPingError:
             logging.warning(f'Ошибка при отправке ping-сообщения')
 
 
-    async def start(self):
-        """
-        Устанавливает соединение с биржей через WebSocket
-        """
-        # первое получение торговых пар
-        self.fetch_market_symbols()
-
-        while True:
-            try:
-                logging.info('Подключение к WebSocket')
-                async with websockets.connect(self.url_wss) as ws: 
-                    logging.info('Соединение установлено')
-                
-                    async with asyncio.TaskGroup() as tg:
-                        tg.create_task(self._listen_socket(ws)) 
-                        tg.create_task(self.send_ping(ws))
-                        tg.create_task(self.first_subscribe_to_symbols(ws))
-                        tg.create_task(self.symbols_updating()) 
-                        tg.create_task(self.subscribe_updating(ws))
-
-            except WebSocketTimeoutError:
-                logging.error(f'Сервер перестал присылать данные, но не закрыл сокет корректно')
-            except ConnectionClosedError:
-                logging.error(f'соединение прервано')
-            except Exception as e:
-                logging.error(f'Непредвиденная ошибка {e}')
+    
 

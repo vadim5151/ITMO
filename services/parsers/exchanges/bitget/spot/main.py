@@ -14,7 +14,7 @@ async def main():
             url_wss="wss://ws.bitget.com/v2/ws/public",
             exchange_name= 'bitget',
             url_get_pairs="https://api.bitget.com/api/v2/spot/public/symbols",
-            ping_interval=20,
+            ping_delay=10,
             ping_format='ping',
         )
         
@@ -31,8 +31,8 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info(msg='Работа парсера остановлена пользователем')
-    except:
-        logging.error(msg=f'Непредвиденная ошибка')
+        logging.info('Работа парсера остановлена пользователем')
+    except Exception as e:
+        logging.error(f'Непредвиденная ошибка при запуске main{e}')
 
 
